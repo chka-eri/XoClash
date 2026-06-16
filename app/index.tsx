@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   View,
   Text,
@@ -7,27 +7,43 @@ import {
   Alert,
   StatusBar,
   Dimensions,
-  Animated,
   ScrollView,
+  Platform,
 } from 'react-native';
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withSpring,
+  withTiming,
+  withSequence,
+  withRepeat,
+  Easing,
+  interpolate,
+  SharedValue,
+  FadeIn,
+  FadeOut,
+  BounceIn,
+  ZoomIn,
+} from 'react-native-reanimated';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import * as Haptics from 'expo-haptics';
 
 /* ─── Board geometry ──────────────────────────────────────────────────────── */
 const { width: SW } = Dimensions.get('window');
-const HP = 20;   // root horizontal padding
-const CP = 12;   // board card padding
-const CG = 8;    // gap between cells
+const HP = 20;
+const CP = 12;
+const CG = 8;
 const BOARD_W = Math.min(SW - (HP + CP) * 2, 308);
-const CS      = Math.floor((BOARD_W - CG * 2) / 3);   // cell size
+const CS = Math.floor((BOARD_W - CG * 2) / 3);
 
 /* ─── Types ──────────────────────────────────────────────────────────────── */
 type Piece = 'X' | 'O' | null;
-type Diff  = 'easy' | 'medium' | 'hard';
+type Diff = 'easy' | 'medium' | 'hard';
 type Score = { w: number; l: number; d: number };
 type Stats = Record<Diff, Score>;
-type GRes  = { winner: string; line: number[] } | null;
-type Scr   = 'menu' | 'game';
+type GRes = { winner: string; line: number[] } | null;
+type Scr = 'menu' | 'game';
 type Theme = typeof DARK;
 
 /* ─── Difficulty config ──────────────────────────────────────────────────── */
@@ -39,19 +55,19 @@ const DIFFS: Record<Diff, {
     emoji: '🌱', label: 'ROOKIE',
     desc: 'AI plays randomly. Perfect for beginners!',
     thinking: 'Rookie is confused… 🤔',
-    color: '#4ADE80', delay: 260,
+    color: '#00E676', delay: 260,
   },
   medium: {
     emoji: '⚡', label: 'VETERAN',
     desc: 'AI blocks & attacks. Stay sharp.',
     thinking: 'Veteran is plotting… ⚡',
-    color: '#FBBF24', delay: 500,
+    color: '#FFD600', delay: 500,
   },
   hard: {
     emoji: '💀', label: 'LEGEND',
     desc: 'Unbeatable AI. A draw is glory.',
     thinking: 'Legend sees all futures… 💀',
-    color: '#F87171', delay: 640,
+    color: '#FF1744', delay: 640,
   },
 };
 
@@ -105,20 +121,20 @@ function randOf(b: Piece[]): number {
 }
 
 function mediumMove(b: Piece[]): number {
-  for (let i = 0; i < 9; i++) {   // take win
+  for (let i = 0; i < 9; i++) {
     if (!b[i]) { b[i] = 'O'; const r = checkResult(b); b[i] = null; if (r?.winner === 'O') return i; }
   }
-  for (let i = 0; i < 9; i++) {   // block player
+  for (let i = 0; i < 9; i++) {
     if (!b[i]) { b[i] = 'X'; const r = checkResult(b); b[i] = null; if (r?.winner === 'X') return i; }
   }
-  if (!b[4]) return 4;             // center
+  if (!b[4]) return 4;
   const corners = [0, 2, 6, 8].filter(i => !b[i]);
   if (corners.length) return corners[Math.floor(Math.random() * corners.length)];
   return randOf(b);
 }
 
 function getMove(b: Piece[], diff: Diff): number {
-  if (diff === 'easy')   return randOf(b);
+  if (diff === 'easy') return randOf(b);
   if (diff === 'medium') return mediumMove(b);
   return hardMove(b);
 }
@@ -126,7 +142,7 @@ function getMove(b: Piece[], diff: Diff): number {
 /* ─── Storage ────────────────────────────────────────────────────────────── */
 const SK = '@xoclash3:stats';
 const TK = '@xoclash3:theme';
-const E0: Stats = { easy: { w:0, l:0, d:0 }, medium: { w:0, l:0, d:0 }, hard: { w:0, l:0, d:0 } };
+const E0: Stats = { easy: { w: 0, l: 0, d: 0 }, medium: { w: 0, l: 0, d: 0 }, hard: { w: 0, l: 0, d: 0 } };
 
 async function loadData(): Promise<{ stats: Stats; dark: boolean }> {
   try {
@@ -141,19 +157,186 @@ const saveTheme = async (d: boolean) =>
 
 /* ─── Themes ─────────────────────────────────────────────────────────────── */
 const DARK = {
-  bg: '#090D1A', surf: '#111827', surf2: '#151D30', border: '#1E2A42',
-  text: '#E6E9FF', muted: '#4E5878',
-  player: '#5AB8FF', ai: '#FF506A',
-  cell: '#162035', cellWin: '#0C1D38',
-  btnPrimary: '#3B9FFF', shadow: '#000000',
+  bg: '#070B17',
+  surf: 'rgba(17, 24, 39, 0.65)',
+  surf2: 'rgba(21, 29, 48, 0.45)',
+  border: 'rgba(255, 255, 255, 0.06)',
+  text: '#E6E9FF',
+  muted: '#5C6794',
+  player: '#00D4FF',
+  ai: '#FF2D55',
+  cell: 'rgba(22, 32, 53, 0.55)',
+  cellWin: 'rgba(0, 212, 255, 0.12)',
+  btnPrimary: '#2979FF',
+  shadow: '#000000',
+  glowX: 'rgba(0, 212, 255, 0.7)',
+  glowO: 'rgba(255, 45, 85, 0.7)',
 };
 const LIGHT = {
-  bg: '#ECF0FF', surf: '#FFFFFF', surf2: '#EEF1FF', border: '#CDD6FF',
-  text: '#0B1020', muted: '#667098',
-  player: '#1874F5', ai: '#E5203C',
-  cell: '#DDE4FF', cellWin:'#B8D4FF',
-  btnPrimary: '#1874F5', shadow: '#8898CC',
+  bg: '#ECF0FF',
+  surf: 'rgba(255, 255, 255, 0.78)',
+  surf2: 'rgba(238, 241, 255, 0.7)',
+  border: 'rgba(0, 0, 0, 0.06)',
+  text: '#0B1020',
+  muted: '#667098',
+  player: '#0066FF',
+  ai: '#E5203C',
+  cell: 'rgba(221, 228, 255, 0.7)',
+  cellWin: 'rgba(0, 102, 255, 0.12)',
+  btnPrimary: '#0066FF',
+  shadow: '#8898CC',
+  glowX: 'rgba(0, 102, 255, 0.5)',
+  glowO: 'rgba(229, 32, 60, 0.5)',
 };
+
+/* ─── Confetti celebration ───────────────────────────────────────────────── */
+const CONFETTI_COLORS = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7', '#DDA0DD', '#F7DC6F', '#BB8FCE', '#85C1E9', '#FF9FF3'];
+
+function Confetti() {
+  const pieces = useMemo(() =>
+    Array.from({ length: 28 }, (_, i) => ({
+      x: (SW / 28) * i + (Math.random() - 0.5) * 30,
+      color: CONFETTI_COLORS[i % CONFETTI_COLORS.length],
+      size: 5 + (i % 5) * 2,
+      delay: (i % 7) * 50 + Math.random() * 150,
+    })), []
+  );
+
+  return (
+    <View style={StyleSheet.absoluteFill} pointerEvents="none">
+      {pieces.map(p => (
+        <Animated.View
+          key={p.x}
+          entering={ZoomIn.duration(400).delay(p.delay).springify().damping(8)}
+          exiting={FadeOut.duration(200)}
+          style={{
+            position: 'absolute',
+            top: -10,
+            left: p.x,
+            width: p.size,
+            height: p.size,
+            borderRadius: Math.round(p.size / 2),
+            backgroundColor: p.color,
+            shadowColor: p.color,
+            shadowOffset: { width: 0, height: 0 },
+            shadowOpacity: 0.8,
+            shadowRadius: 6,
+            elevation: 4,
+          }}
+        />
+      ))}
+    </View>
+  );
+}
+
+/* ─── Animated score number ──────────────────────────────────────────────── */
+function AnimatedNumber({ value, style }: { value: number; style?: any }) {
+  const scale = useSharedValue(1);
+
+  useEffect(() => {
+    scale.value = withSequence(
+      withSpring(1.35, { damping: 2, stiffness: 200 }),
+      withSpring(1, { damping: 4, stiffness: 150 })
+    );
+  }, [value]);
+
+  const animStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: scale.value }],
+  }));
+
+  return <Animated.Text style={[style, animStyle]}>{value}</Animated.Text>;
+}
+
+/* ─── Animated background aurora ─────────────────────────────────────────── */
+function AuroraBackground({ theme }: { theme: Theme }) {
+  const dx1 = useSharedValue(0);
+  const dy1 = useSharedValue(0);
+  const dx2 = useSharedValue(0);
+  const dy2 = useSharedValue(0);
+  const dx3 = useSharedValue(0);
+  const dy3 = useSharedValue(0);
+
+  useEffect(() => {
+    const dur = (base: number) => ({ duration: base, easing: Easing.inOut(Easing.sin) as any });
+    dx1.value = withRepeat(withSequence(withTiming(50, dur(6000)), withTiming(-50, dur(6000))), -1, true);
+    dy1.value = withRepeat(withSequence(withTiming(30, dur(7000)), withTiming(-30, dur(7000))), -1, true);
+    dx2.value = withRepeat(withSequence(withTiming(-40, dur(8000)), withTiming(40, dur(8000))), -1, true);
+    dy2.value = withRepeat(withSequence(withTiming(-20, dur(5000)), withTiming(20, dur(5000))), -1, true);
+    dx3.value = withRepeat(withSequence(withTiming(25, dur(9000)), withTiming(-25, dur(9000))), -1, true);
+    dy3.value = withRepeat(withSequence(withTiming(-35, dur(6500)), withTiming(35, dur(6500))), -1, true);
+  }, []);
+
+  const a1 = useAnimatedStyle(() => ({ transform: [{ translateX: dx1.value }, { translateY: dy1.value }] }));
+  const a2 = useAnimatedStyle(() => ({ transform: [{ translateX: dx2.value }, { translateY: dy2.value }] }));
+  const a3 = useAnimatedStyle(() => ({ transform: [{ translateX: dx3.value }, { translateY: dy3.value }] }));
+
+  return (
+    <View style={StyleSheet.absoluteFill}>
+      <Animated.View
+        style={[{
+          position: 'absolute',
+          width: 280, height: 280, borderRadius: 140,
+          backgroundColor: theme.player + '0A',
+          top: -100, left: -80,
+        }, a1]}
+      />
+      <Animated.View
+        style={[{
+          position: 'absolute',
+          width: 220, height: 220, borderRadius: 110,
+          backgroundColor: theme.ai + '08',
+          bottom: 40, right: -60,
+        }, a2]}
+      />
+      <Animated.View
+        style={[{
+          position: 'absolute',
+          width: 190, height: 190, borderRadius: 95,
+          backgroundColor: '#FFD60006',
+          top: '35%', left: '25%',
+        }, a3]}
+      />
+    </View>
+  );
+}
+
+/* ─── Animated cell wrapper ──────────────────────────────────────────────── */
+function CellView({ sv, children }: { sv: SharedValue<number>; children: React.ReactNode }) {
+  const animStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: sv.value }],
+    opacity: interpolate(sv.value, [0.76, 1], [0.85, 1]),
+  }));
+  return <Animated.View style={animStyle}>{children}</Animated.View>;
+}
+
+/* ─── Animated glow overlay for win ──────────────────────────────────────── */
+function WinPulse({ color }: { color: string }) {
+  const opacity = useSharedValue(0.3);
+
+  useEffect(() => {
+    opacity.value = withRepeat(
+      withSequence(
+        withTiming(0.7, { duration: 600, easing: Easing.inOut(Easing.sin) }),
+        withTiming(0.3, { duration: 600, easing: Easing.inOut(Easing.sin) })
+      ),
+      -1, true
+    );
+  }, []);
+
+  const style = useAnimatedStyle(() => ({
+    opacity: opacity.value,
+  }));
+
+  return (
+    <Animated.View
+      style={[StyleSheet.absoluteFill, style, {
+        backgroundColor: color + '18',
+        borderRadius: 22,
+      }]}
+      pointerEvents="none"
+    />
+  );
+}
 
 /* ─── Component ──────────────────────────────────────────────────────────── */
 const EB: Piece[] = Array(9).fill(null);
@@ -162,26 +345,27 @@ export default function XoClash() {
   const insets = useSafeAreaInsets();
 
   /* ── state ── */
-  const [screen,   setScreen]   = useState<Scr>('menu');
-  const [diff,     setDiff]     = useState<Diff>('medium');
-  const [board,    setBoard]    = useState<Piece[]>([...EB]);
-  const [pTurn,    setPTurn]    = useState(true);
-  const [over,     setOver]     = useState(false);
-  const [result,   setResult]   = useState<GRes>(null);
-  const [session,  setSession]  = useState<Score>({ w:0, l:0, d:0 });
-  const [streak,   setStreak]   = useState(0);
+  const [screen, setScreen] = useState<Scr>('menu');
+  const [diff, setDiff] = useState<Diff>('medium');
+  const [board, setBoard] = useState<Piece[]>([...EB]);
+  const [pTurn, setPTurn] = useState(true);
+  const [over, setOver] = useState(false);
+  const [result, setResult] = useState<GRes>(null);
+  const [session, setSession] = useState<Score>({ w: 0, l: 0, d: 0 });
+  const [streak, setStreak] = useState(0);
   const [thinking, setThinking] = useState(false);
-  const [stats,    setStats]    = useState<Stats>(E0);
-  const [dark,     setDark]     = useState(true);
-  const [loaded,   setLoaded]   = useState(false);
+  const [stats, setStats] = useState<Stats>(E0);
+  const [dark, setDark] = useState(true);
+  const [loaded, setLoaded] = useState(false);
 
   const theme: Theme = dark ? DARK : LIGHT;
   const dc = DIFFS[diff];
 
-  /* ── animations ── */
-  const cellA = useRef(Array.from({ length: 9 }, () => new Animated.Value(1))).current;
-  const winA  = useRef(new Animated.Value(1)).current;
-  const winL  = useRef<Animated.CompositeAnimation | null>(null);
+  /* ── reanimated shared values ── */
+  const cellSv = useMemo(() => Array.from({ length: 9 }, () => useSharedValue(1)), []);
+  const winSv = useSharedValue(1);
+  const winGlowOpacity = useSharedValue(0);
+  const celebrateKey = useRef(0);
 
   /* ── load persisted data ── */
   useEffect(() => {
@@ -201,6 +385,7 @@ export default function XoClash() {
         copy[mv] = 'O';
         setBoard(copy);
         tapAnim(mv);
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
         const r = checkResult(copy);
         if (r) endGame(r); else setPTurn(true);
       }
@@ -212,25 +397,41 @@ export default function XoClash() {
 
   /* ── helpers ── */
   function tapAnim(idx: number) {
-    Animated.sequence([
-      Animated.timing(cellA[idx], { toValue: 0.76, duration: 60, useNativeDriver: true }),
-      Animated.spring(cellA[idx],  { toValue: 1, friction: 3, tension: 240, useNativeDriver: true }),
-    ]).start();
+    cellSv[idx].value = withSequence(
+      withTiming(0.78, { duration: 50 }),
+      withSpring(1, { damping: 4, stiffness: 200 })
+    );
   }
 
   function startWin() {
-    winL.current = Animated.loop(Animated.sequence([
-      Animated.timing(winA, { toValue: 1.13, duration: 370, useNativeDriver: true }),
-      Animated.timing(winA, { toValue: 0.89, duration: 370, useNativeDriver: true }),
-    ]));
-    winL.current.start();
+    winSv.value = withRepeat(
+      withSequence(
+        withTiming(1.1, { duration: 350, easing: Easing.inOut(Easing.sin) }),
+        withTiming(0.92, { duration: 350, easing: Easing.inOut(Easing.sin) })
+      ),
+      -1, true
+    );
+    winGlowOpacity.value = withTiming(1, { duration: 300 });
   }
 
-  function stopWin() { winL.current?.stop(); winA.setValue(1); }
+  function stopWin() {
+    winSv.value = 1;
+    winGlowOpacity.value = withTiming(0, { duration: 200 });
+  }
 
   function endGame(r: GRes) {
     setResult(r); setOver(true);
-    if (r?.winner !== 'draw') startWin();
+    celebrateKey.current++;
+    if (r?.winner !== 'draw') {
+      startWin();
+      Haptics.notificationAsync(
+        r?.winner === 'X'
+          ? Haptics.NotificationFeedbackType.Success
+          : Haptics.NotificationFeedbackType.Error
+      );
+    } else {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+    }
     setSession(p => ({
       w: p.w + (r?.winner === 'X' ? 1 : 0),
       l: p.l + (r?.winner === 'O' ? 1 : 0),
@@ -239,8 +440,8 @@ export default function XoClash() {
     setStreak(s => (r?.winner === 'X' ? s + 1 : 0));
     setStats(prev => {
       const next: Stats = JSON.parse(JSON.stringify(prev));
-      if      (r?.winner === 'X')    next[diff].w++;
-      else if (r?.winner === 'O')    next[diff].l++;
+      if (r?.winner === 'X') next[diff].w++;
+      else if (r?.winner === 'O') next[diff].l++;
       else if (r?.winner === 'draw') next[diff].d++;
       if (loaded) saveStats(next);
       return next;
@@ -252,6 +453,7 @@ export default function XoClash() {
     const next = [...board] as Piece[];
     next[idx] = 'X';
     setBoard(next); tapAnim(idx);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     const r = checkResult(next);
     if (r) endGame(r); else setPTurn(false);
   }
@@ -260,27 +462,28 @@ export default function XoClash() {
     stopWin();
     setBoard([...EB]); setPTurn(true); setOver(false);
     setResult(null); setThinking(false);
-    cellA.forEach(a => a.setValue(1));
+    cellSv.forEach(sv => { sv.value = 1; });
   }
 
   function goMenu() {
     stopWin(); setScreen('menu');
     setBoard([...EB]); setPTurn(true); setOver(false);
     setResult(null); setThinking(false);
-    setSession({ w:0, l:0, d:0 }); setStreak(0);
-    cellA.forEach(a => a.setValue(1));
+    setSession({ w: 0, l: 0, d: 0 }); setStreak(0);
+    cellSv.forEach(sv => { sv.value = 1; });
   }
 
   function pickDiff(d: Diff) {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     setDiff(d); stopWin();
     setBoard([...EB]); setPTurn(true); setOver(false);
     setResult(null); setThinking(false);
-    setSession({ w:0, l:0, d:0 }); setStreak(0);
-    cellA.forEach(a => a.setValue(1));
+    setSession({ w: 0, l: 0, d: 0 }); setStreak(0);
+    cellSv.forEach(sv => { sv.value = 1; });
     setScreen('game');
   }
 
-  function toggleDark() { setDark(d => { saveTheme(!d); return !d; }); }
+  function toggleDark() { setDark(d => { saveTheme(!d); return !d; }); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); }
 
   function confirmReset() {
     Alert.alert(
@@ -296,11 +499,13 @@ export default function XoClash() {
   /* ── status text ── */
   let stTxt: string, stClr: string;
   if (over && result) {
-    if      (result.winner === 'X')    { stTxt = streak >= 3 ? `🔥 ${streak} wins in a row!` : 'You win! 🎉'; stClr = theme.player; }
-    else if (result.winner === 'O')    { stTxt = `${dc.emoji} ${dc.label} wins 😈`;                            stClr = theme.ai; }
-    else                               { stTxt = "It's a draw 🤝";                                             stClr = theme.muted; }
-  } else if (thinking) {               stTxt = dc.thinking;                                                    stClr = dc.color; }
-  else {                               stTxt = 'Your turn  –  X';                                              stClr = theme.player; }
+    if (result.winner === 'X') { stTxt = streak >= 3 ? `🔥 ${streak} wins in a row!` : 'You win! 🎉'; stClr = theme.player; }
+    else if (result.winner === 'O') { stTxt = `${dc.emoji} ${dc.label} wins 😈`; stClr = theme.ai; }
+    else { stTxt = "It's a draw 🤝"; stClr = theme.muted; }
+  } else if (thinking) { stTxt = dc.thinking; stClr = dc.color; }
+  else { stTxt = 'Your turn  –  X'; stClr = theme.player; }
+
+  const winColor = result?.winner === 'O' ? theme.ai : result?.winner === 'X' ? theme.player : theme.muted;
 
   const s = mkStyles(theme);
 
@@ -309,89 +514,89 @@ export default function XoClash() {
   ════════════════════════════════════════════════════════════════════ */
   if (screen === 'menu') {
     return (
-      <ScrollView
-        style={{ flex: 1, backgroundColor: theme.bg }}
-        contentContainerStyle={[s.menuRoot, { paddingTop: insets.top + 24 }]}
-        showsVerticalScrollIndicator={false}
-      >
+      <View style={{ flex: 1, backgroundColor: theme.bg }}>
+        <AuroraBackground theme={theme} />
         <StatusBar barStyle={dark ? 'light-content' : 'dark-content'} backgroundColor={theme.bg} />
-
-        {/* ── title row ── */}
-        <View style={s.menuHead}>
-          <View>
-            <Text style={s.menuTitle}>XO Clash</Text>
-            <Text style={s.menuSub}>Pick your challenge</Text>
-          </View>
-          <TouchableOpacity style={s.pill} onPress={toggleDark} activeOpacity={0.72}>
-            <Text style={s.pillTxt}>{dark ? '🌞' : '🌙'}</Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* ── difficulty cards ── */}
-        {(['easy', 'medium', 'hard'] as Diff[]).map(d => {
-          const cfg  = DIFFS[d];
-          const st   = stats[d];
-          const tot  = st.w + st.l + st.d;
-          const wPct = tot > 0 ? Math.round((st.w / tot) * 100) : null;
-          return (
-            <TouchableOpacity
-              key={d}
-              style={[s.diffCard, { borderColor: cfg.color + '60' }]}
-              onPress={() => pickDiff(d)}
-              activeOpacity={0.8}
-            >
-              {/* left: emoji box + text */}
-              <View style={s.diffLeft}>
-                <View style={[s.diffIcon, { backgroundColor: cfg.color + '22' }]}>
-                  <Text style={s.diffEmoji}>{cfg.emoji}</Text>
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={[s.diffLabel, { color: cfg.color }]}>{cfg.label}</Text>
-                  <Text style={[s.diffDesc,  { color: theme.muted }]}>{cfg.desc}</Text>
-                </View>
-              </View>
-
-              {/* right: win % or "NEW" */}
-              <View style={s.diffRight}>
-                {wPct !== null ? (
-                  <>
-                    <Text style={[s.diffPct,    { color: cfg.color }]}>{wPct}%</Text>
-                    <Text style={[s.diffPctSub, { color: theme.muted }]}>win</Text>
-                  </>
-                ) : (
-                  <Text style={[s.diffNew, { color: theme.muted }]}>NEW</Text>
-                )}
-                <Text style={[s.diffArrow, { color: cfg.color }]}>›</Text>
-              </View>
+        <ScrollView
+          style={{ flex: 1 }}
+          contentContainerStyle={[s.menuRoot, { paddingTop: insets.top + 24 }]}
+          showsVerticalScrollIndicator={false}
+        >
+          {/* ── title row ── */}
+          <View style={s.menuHead}>
+            <View>
+              <Text style={s.menuTitle}>XO Clash</Text>
+              <Text style={s.menuSub}>Pick your challenge</Text>
+            </View>
+            <TouchableOpacity style={s.pill} onPress={toggleDark} activeOpacity={0.72}>
+              <Text style={s.pillTxt}>{dark ? '☀️' : '🌙'}</Text>
             </TouchableOpacity>
-          );
-        })}
+          </View>
 
-        {/* ── all-time mini stats ── */}
-        <View style={s.miniRow}>
+          {/* ── difficulty cards ── */}
           {(['easy', 'medium', 'hard'] as Diff[]).map(d => {
-            const { w, l, d: dr } = stats[d];
+            const cfg = DIFFS[d];
+            const st = stats[d];
+            const tot = st.w + st.l + st.d;
+            const wPct = tot > 0 ? Math.round((st.w / tot) * 100) : null;
             return (
-              <View key={d} style={[s.miniBox, { borderColor: DIFFS[d].color + '40' }]}>
-                <Text style={s.miniEmoji}>{DIFFS[d].emoji}</Text>
-                <Text style={[s.miniW,   { color: theme.player }]}>{w}W</Text>
-                <Text style={[s.miniSep, { color: theme.muted }]}>·</Text>
-                <Text style={[s.miniL,   { color: theme.ai }]}>{l}L</Text>
-                <Text style={[s.miniSep, { color: theme.muted }]}>·</Text>
-                <Text style={[s.miniD,   { color: theme.muted }]}>{dr}D</Text>
-              </View>
+              <TouchableOpacity
+                key={d}
+                style={[s.diffCard, { borderColor: cfg.color + '50' }]}
+                onPress={() => pickDiff(d)}
+                activeOpacity={0.85}
+              >
+                <View style={s.diffLeft}>
+                  <View style={[s.diffIcon, { backgroundColor: cfg.color + '18' }]}>
+                    <View style={[s.diffGlow, { backgroundColor: cfg.color + '30' }]} />
+                    <Text style={s.diffEmoji}>{cfg.emoji}</Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[s.diffLabel, { color: cfg.color }]}>{cfg.label}</Text>
+                    <Text style={[s.diffDesc, { color: theme.muted }]}>{cfg.desc}</Text>
+                  </View>
+                </View>
+                <View style={s.diffRight}>
+                  {wPct !== null ? (
+                    <>
+                      <Text style={[s.diffPct, { color: cfg.color }]}>{wPct}%</Text>
+                      <Text style={[s.diffPctSub, { color: theme.muted }]}>win</Text>
+                    </>
+                  ) : (
+                    <Text style={[s.diffNew, { color: theme.muted }]}>NEW</Text>
+                  )}
+                  <Text style={[s.diffArrow, { color: cfg.color }]}>›</Text>
+                </View>
+              </TouchableOpacity>
             );
           })}
-        </View>
 
-        <TouchableOpacity onPress={confirmReset} style={s.resetBtn}>
-          <Text style={[s.resetTxt, { color: theme.muted }]}>Reset all stats</Text>
-        </TouchableOpacity>
+          {/* ── all-time mini stats ── */}
+          <View style={s.miniRow}>
+            {(['easy', 'medium', 'hard'] as Diff[]).map(d => {
+              const { w, l, d: dr } = stats[d];
+              return (
+                <View key={d} style={[s.miniBox, { borderColor: DIFFS[d].color + '30' }]}>
+                  <Text style={s.miniEmoji}>{DIFFS[d].emoji}</Text>
+                  <Text style={[s.miniW, { color: theme.player }]}>{w}W</Text>
+                  <Text style={[s.miniSep, { color: theme.muted }]}>·</Text>
+                  <Text style={[s.miniL, { color: theme.ai }]}>{l}L</Text>
+                  <Text style={[s.miniSep, { color: theme.muted }]}>·</Text>
+                  <Text style={[s.miniD, { color: theme.muted }]}>{dr}D</Text>
+                </View>
+              );
+            })}
+          </View>
 
-        <Text style={[s.footer, { color: theme.muted }]}>
-          No permissions required  ·  Fully offline
-        </Text>
-      </ScrollView>
+          <TouchableOpacity onPress={confirmReset} style={s.resetBtn}>
+            <Text style={[s.resetTxt, { color: theme.muted }]}>Reset all stats</Text>
+          </TouchableOpacity>
+
+          <Text style={[s.footer, { color: theme.muted }]}>
+            No permissions required  ·  Fully offline
+          </Text>
+        </ScrollView>
+      </View>
     );
   }
 
@@ -400,6 +605,7 @@ export default function XoClash() {
   ════════════════════════════════════════════════════════════════════ */
   return (
     <View style={[s.gameRoot, { paddingTop: insets.top + 10 }]}>
+      <AuroraBackground theme={theme} />
       <StatusBar barStyle={dark ? 'light-content' : 'dark-content'} backgroundColor={theme.bg} />
 
       {/* ── header ── */}
@@ -408,12 +614,12 @@ export default function XoClash() {
           <Text style={[s.pillTxt, s.backTxt]}>← Menu</Text>
         </TouchableOpacity>
 
-        <View style={[s.badge, { backgroundColor: dc.color + '22', borderColor: dc.color }]}>
+        <View style={[s.badge, { backgroundColor: dc.color + '18', borderColor: dc.color }]}>
           <Text style={[s.badgeTxt, { color: dc.color }]}>{dc.emoji}  {dc.label}</Text>
         </View>
 
         <TouchableOpacity style={s.pill} onPress={toggleDark} activeOpacity={0.72}>
-          <Text style={s.pillTxt}>{dark ? '🌞' : '🌙'}</Text>
+          <Text style={s.pillTxt}>{dark ? '☀️' : '🌙'}</Text>
         </TouchableOpacity>
       </View>
 
@@ -421,17 +627,17 @@ export default function XoClash() {
       <View style={s.scoreCard}>
         <View style={s.scoreCol}>
           <Text style={[s.scoreLbl, { color: theme.player }]}>YOU</Text>
-          <Text style={[s.scoreNum, { color: theme.player }]}>{session.w}</Text>
+          <AnimatedNumber value={session.w} style={[s.scoreNum, { color: theme.player }]} />
         </View>
         <View style={s.scoreSep} />
         <View style={s.scoreCol}>
           <Text style={[s.scoreLbl, { color: theme.muted }]}>DRAW</Text>
-          <Text style={[s.scoreNum, { color: theme.muted }]}>{session.d}</Text>
+          <AnimatedNumber value={session.d} style={[s.scoreNum, { color: theme.muted }]} />
         </View>
         <View style={s.scoreSep} />
         <View style={s.scoreCol}>
           <Text style={[s.scoreLbl, { color: theme.ai }]}>AI</Text>
-          <Text style={[s.scoreNum, { color: theme.ai }]}>{session.l}</Text>
+          <AnimatedNumber value={session.l} style={[s.scoreNum, { color: theme.ai }]} />
         </View>
         {streak >= 2 && (
           <View style={s.streakBadge}>
@@ -447,31 +653,38 @@ export default function XoClash() {
 
       {/* ── board ── */}
       <View style={s.boardCard}>
+        {over && result?.winner !== 'draw' && <WinPulse color={winColor} />}
+        {over && result?.winner !== 'draw' && result && <Confetti key={celebrateKey.current} />}
         {[0, 1, 2].map(row => (
           <View key={row} style={s.boardRow}>
             {[0, 1, 2].map(col => {
-              const idx    = row * 3 + col;
-              const cell   = board[idx];
-              const isWin  = result?.line?.includes(idx) ?? false;
-              const wClr   = result?.winner === 'O' ? theme.ai : theme.player;
-              const animSc = isWin ? winA : cellA[idx];
+              const idx = row * 3 + col;
+              const cell = board[idx];
+              const isWin = result?.line?.includes(idx) ?? false;
+              const wClr = result?.winner === 'O' ? theme.ai : theme.player;
               return (
-                <Animated.View key={col} style={{ transform: [{ scale: animSc }] }}>
+                <CellView key={col} sv={isWin ? winSv : cellSv[idx]}>
                   <TouchableOpacity
                     style={[
                       s.cell,
-                      isWin && { backgroundColor: theme.cellWin, borderColor: wClr, borderWidth: 2.5 },
+                      isWin && { backgroundColor: theme.cellWin, borderColor: wClr, borderWidth: 2 },
                     ]}
                     onPress={() => pressCell(idx)}
                     activeOpacity={0.65}
+                    disabled={over || thinking || !pTurn}
                   >
                     {cell ? (
-                      <Text style={[s.sym, { color: cell === 'X' ? theme.player : theme.ai }]}>
+                      <Text style={[
+                        s.sym,
+                        { color: cell === 'X' ? theme.player : theme.ai },
+                        cell === 'X' ? { textShadowColor: theme.glowX, textShadowRadius: Platform.OS === 'web' ? 0 : 10, textShadowOffset: { width: 0, height: 0 } }
+                          : { textShadowColor: theme.glowO, textShadowRadius: Platform.OS === 'web' ? 0 : 10, textShadowOffset: { width: 0, height: 0 } },
+                      ]}>
                         {cell}
                       </Text>
                     ) : null}
                   </TouchableOpacity>
-                </Animated.View>
+                </CellView>
               );
             })}
           </View>
@@ -481,7 +694,7 @@ export default function XoClash() {
       {/* ── new game button ── */}
       <TouchableOpacity
         style={[s.newBtn, { backgroundColor: theme.btnPrimary }]}
-        onPress={newGame}
+        onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); newGame(); }}
         activeOpacity={0.82}
       >
         <Text style={s.newBtnTxt}>New Game</Text>
@@ -494,8 +707,9 @@ export default function XoClash() {
             key={d}
             style={[
               s.diffChip,
-              { borderColor: DIFFS[d].color + (diff === d ? 'FF' : '40') },
-              diff === d && { backgroundColor: DIFFS[d].color + '22' },
+              diff === d && { backgroundColor: DIFFS[d].color + '18' },
+              diff === d && { borderColor: DIFFS[d].color },
+              diff !== d && { borderColor: theme.border },
             ]}
             onPress={() => pickDiff(d)}
             activeOpacity={0.75}
@@ -515,37 +729,55 @@ export default function XoClash() {
 }
 
 /* ─── Styles ─────────────────────────────────────────────────────────────── */
+const GLASS = {
+  borderWidth: 1,
+  borderColor: 'rgba(255,255,255,0.07)',
+  shadowColor: '#000',
+  shadowOffset: { width: 0, height: 8 },
+  shadowOpacity: 0.25,
+  shadowRadius: 20,
+  elevation: 12,
+  overflow: 'hidden' as const,
+};
+
 function mkStyles(t: Theme) {
   return StyleSheet.create({
     /* ── Menu ── */
     menuRoot: {
       alignItems: 'center', paddingHorizontal: HP, paddingBottom: 40,
-      backgroundColor: t.bg,
     },
     menuHead: {
       width: '100%', flexDirection: 'row',
       alignItems: 'center', justifyContent: 'space-between', marginBottom: 28,
     },
-    menuTitle: { fontSize: 38, fontWeight: '900', color: t.text, letterSpacing: 2 },
-    menuSub:   { fontSize: 14, color: t.muted, marginTop: 3, letterSpacing: 0.4 },
+    menuTitle: { fontSize: 38, fontWeight: '900', color: t.text, letterSpacing: 1.5 },
+    menuSub: { fontSize: 14, color: t.muted, marginTop: 3, letterSpacing: 0.4 },
 
     diffCard: {
       width: '100%', flexDirection: 'row', alignItems: 'center',
-      backgroundColor: t.surf, borderRadius: 20, padding: 16,
-      borderWidth: 1.5, marginBottom: 12,
-      shadowColor: t.shadow, shadowOffset: { width: 0, height: 4 },
-      shadowOpacity: 0.14, shadowRadius: 8, elevation: 5,
+      backgroundColor: t.surf,
+      borderRadius: 20, padding: 16,
+      marginBottom: 12,
+      ...GLASS,
     },
-    diffLeft:   { flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 },
-    diffIcon:   { width: 46, height: 46, borderRadius: 13, alignItems: 'center', justifyContent: 'center' },
-    diffEmoji:  { fontSize: 26 },
-    diffLabel:  { fontSize: 15, fontWeight: '900', letterSpacing: 1, marginBottom: 3 },
-    diffDesc:   { fontSize: 12, fontWeight: '500', lineHeight: 18 },
-    diffRight:  { alignItems: 'center', gap: 1, paddingLeft: 8 },
-    diffPct:    { fontSize: 22, fontWeight: '900' },
+    diffLeft: { flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 },
+    diffIcon: {
+      width: 50, height: 50, borderRadius: 14,
+      alignItems: 'center', justifyContent: 'center',
+      position: 'relative', overflow: 'hidden',
+    },
+    diffGlow: {
+      position: 'absolute', width: '100%', height: '100%',
+      borderRadius: 14, opacity: 0.3,
+    },
+    diffEmoji: { fontSize: 26 },
+    diffLabel: { fontSize: 15, fontWeight: '900', letterSpacing: 1, marginBottom: 3 },
+    diffDesc: { fontSize: 12, fontWeight: '500', lineHeight: 18 },
+    diffRight: { alignItems: 'center', gap: 1, paddingLeft: 8 },
+    diffPct: { fontSize: 22, fontWeight: '900' },
     diffPctSub: { fontSize: 10, fontWeight: '700', letterSpacing: 0.5 },
-    diffNew:    { fontSize: 12, fontWeight: '700', letterSpacing: 1 },
-    diffArrow:  { fontSize: 24, marginTop: 2 },
+    diffNew: { fontSize: 12, fontWeight: '700', letterSpacing: 1 },
+    diffArrow: { fontSize: 24, marginTop: 2 },
 
     miniRow: { flexDirection: 'row', gap: 8, marginTop: 4, marginBottom: 20, width: '100%' },
     miniBox: {
@@ -554,21 +786,22 @@ function mkStyles(t: Theme) {
       borderWidth: 1,
     },
     miniEmoji: { fontSize: 14 },
-    miniW:     { fontSize: 11, fontWeight: '800' },
-    miniL:     { fontSize: 11, fontWeight: '800' },
-    miniD:     { fontSize: 11, fontWeight: '600' },
-    miniSep:   { fontSize: 11 },
+    miniW: { fontSize: 11, fontWeight: '800' },
+    miniL: { fontSize: 11, fontWeight: '800' },
+    miniD: { fontSize: 11, fontWeight: '600' },
+    miniSep: { fontSize: 11 },
 
     resetBtn: { marginBottom: 14 },
     resetTxt: { fontSize: 12, fontWeight: '600', textDecorationLine: 'underline' },
-    footer:   { fontSize: 11, letterSpacing: 0.6 },
+    footer: { fontSize: 11, letterSpacing: 0.6 },
 
     /* ── Shared ── */
     pill: {
-      backgroundColor: t.surf, borderRadius: 22,
+      backgroundColor: t.surf,
+      borderRadius: 22,
       paddingHorizontal: 12, paddingVertical: 8,
-      shadowColor: t.shadow, shadowOffset: { width: 0, height: 2 },
-      shadowOpacity: 0.15, shadowRadius: 5, elevation: 3,
+      borderWidth: 1,
+      borderColor: t.border,
     },
     pillTxt: { fontSize: 20 },
     backTxt: { fontSize: 14, color: t.text, fontWeight: '600' },
@@ -582,6 +815,7 @@ function mkStyles(t: Theme) {
     gameHead: {
       width: '100%', flexDirection: 'row',
       alignItems: 'center', justifyContent: 'space-between', marginBottom: 16,
+      zIndex: 10,
     },
     badge: {
       borderRadius: 14, borderWidth: 1.5,
@@ -591,11 +825,11 @@ function mkStyles(t: Theme) {
 
     scoreCard: {
       width: '100%', flexDirection: 'row', alignItems: 'center',
-      backgroundColor: t.surf, borderRadius: 18,
+      backgroundColor: t.surf,
+      borderRadius: 18,
       paddingVertical: 14, paddingHorizontal: 8, marginBottom: 14,
       position: 'relative',
-      shadowColor: t.shadow, shadowOffset: { width: 0, height: 4 },
-      shadowOpacity: 0.12, shadowRadius: 10, elevation: 5,
+      ...GLASS,
     },
     scoreCol: { flex: 1, alignItems: 'center' },
     scoreSep: { width: 1, height: 32, backgroundColor: t.border },
@@ -606,23 +840,29 @@ function mkStyles(t: Theme) {
       position: 'absolute', right: 10, top: -12,
       backgroundColor: '#FF6A1A', borderRadius: 10,
       paddingHorizontal: 8, paddingVertical: 3,
+      shadowColor: '#FF6A1A',
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.4,
+      shadowRadius: 6,
+      elevation: 4,
     },
     streakTxt: { color: '#FFF', fontSize: 12, fontWeight: '800' },
 
-    statusBox: { height: 30, justifyContent: 'center', marginBottom: 12 },
+    statusBox: { height: 30, justifyContent: 'center', marginBottom: 12, zIndex: 10 },
     statusTxt: { fontSize: 17, fontWeight: '700', letterSpacing: 0.3 },
 
     boardCard: {
-      backgroundColor: t.surf, borderRadius: 22, padding: CP, gap: CG,
-      shadowColor: t.shadow, shadowOffset: { width: 0, height: 8 },
-      shadowOpacity: 0.20, shadowRadius: 16, elevation: 10, marginBottom: 18,
+      backgroundColor: t.surf,
+      borderRadius: 22, padding: CP, gap: CG,
+      position: 'relative',
+      ...GLASS,
     },
     boardRow: { flexDirection: 'row', gap: CG },
     cell: {
       width: CS, height: CS, backgroundColor: t.cell, borderRadius: 14,
       alignItems: 'center', justifyContent: 'center',
-      shadowColor: t.shadow, shadowOffset: { width: 0, height: 2 },
-      shadowOpacity: 0.1, shadowRadius: 4, elevation: 2,
+      borderWidth: 1,
+      borderColor: t.border,
     },
     sym: {
       fontSize: Math.floor(CS * 0.54),
@@ -634,15 +874,20 @@ function mkStyles(t: Theme) {
     newBtn: {
       width: '100%', paddingVertical: 14, borderRadius: 14,
       alignItems: 'center', marginBottom: 12,
-      shadowColor: t.shadow, shadowOffset: { width: 0, height: 4 },
-      shadowOpacity: 0.25, shadowRadius: 8, elevation: 6,
+      shadowColor: t.btnPrimary,
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.35,
+      shadowRadius: 10,
+      elevation: 6,
+      zIndex: 10,
     },
     newBtnTxt: { color: '#FFF', fontSize: 15, fontWeight: '800', letterSpacing: 0.5 },
 
-    diffSwitchRow: { flexDirection: 'row', gap: 8, width: '100%' },
+    diffSwitchRow: { flexDirection: 'row', gap: 8, width: '100%', zIndex: 10 },
     diffChip: {
       flex: 1, paddingVertical: 8, borderRadius: 10, borderWidth: 1.5,
       alignItems: 'center',
+      backgroundColor: t.surf,
     },
     diffChipTxt: { fontSize: 10, fontWeight: '800', letterSpacing: 0.5 },
   });
